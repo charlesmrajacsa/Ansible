@@ -1,0 +1,6 @@
+- name: Extend LV and resize FS
+  lvol:
+    vg: "{{ vg_name }}"
+    lv: "{{ lv_name }}"
+    size: "+{{ size }}"
+    resizefs: yes

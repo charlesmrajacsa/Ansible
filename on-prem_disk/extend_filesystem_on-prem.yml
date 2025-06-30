@@ -1,0 +1,17 @@
+---
+- name: Create and mount filesystem (On-Prem)
+  hosts: node01
+  become: yes
+  vars_prompt:
+    - name: vg_name
+      prompt: "Volume Group name"
+    - name: lv_name
+      prompt: "Logical Volume name"
+    - name: mount_point
+      prompt: "Mount point path"
+    - name: size
+      prompt: "Size (e.g., 5G)"
+
+  roles:
+    - check_create_vg
+    - extend_fs

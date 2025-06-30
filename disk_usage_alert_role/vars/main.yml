@@ -1,0 +1,5 @@
+zammad_url: "http://192.168.31.93:8080"
+automation_group_id: 2
+linux_admin_group_id: 3
+disk_usage_threshold: 40
+zammad_token: "YKdqUYDpsKK5azALaH9L5pYZ5J-1Mix3wwSk_LfF0gHtv0xx6l6OiRytfDGYf461"

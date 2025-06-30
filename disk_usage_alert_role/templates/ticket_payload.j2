@@ -1,0 +1,6 @@
+Disk usage alert detected on {{ inventory_hostname }}.
+
+Threshold: {{ disk_usage_threshold }}%
+Current usage: {{ disk_check.stdout | default('N/A') }}
+
+Automation remediation has been triggered.

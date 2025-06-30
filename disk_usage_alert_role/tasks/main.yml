@@ -1,0 +1,112 @@
+    - name: Check root disk usage
+      command: df -h /
+      register: disk_check
+      changed_when: false
+
+    - name: Parse usage percent as an integer
+      set_fact:
+        usage_percent: "{{ disk_check.stdout_lines[1].split()[4] | regex_replace('%', '') | int }}"
+
+    #- name: Debug disk usage variable
+    #  debug:
+    #    msg: "Usage percent (type: {{ usage_percent | type_debug }}): {{ usage_percent }}"
+
+    #- name: Debug disk usage threshold type
+    #  debug:
+    #    msg: "Threshold (type: {{ disk_usage_threshold | type_debug }}): {{ disk_usage_threshold }}"
+
+    #- name: Debug usage percent type
+    #  debug:
+    #    msg: "Usage percent (type: {{ usage_percent | type_debug }}): {{ usage_percent }}"
+
+    #- name: Create ticket if threshold breached
+    #  when: usage_percent >= disk_usage_threshold
+    - name: Create ticket if threshold breached
+      when: usage_percent | int >= disk_usage_threshold | int
+      uri:
+        url: "{{ zammad_url }}/api/v1/tickets"
+        method: POST
+        headers:
+          Authorization: "Token token={{ zammad_token }}"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          title: "Disk alert on {{ inventory_hostname }}"
+          group_id: "{{ automation_group_id }}"
+          article:
+            subject: "Disk Alert"
+            body: "{{ lookup('template', 'ticket_payload.j2') }}"
+            type: note
+          customer_id: 1
+        status_code: [200, 201]
+        return_content: yes
+      register: ticket_create
+
+    #- name: Debug ticket creation response
+    #  debug:
+    #    msg: "{{ ticket_create }}"
+
+
+    - name: Extract ticket ID
+      set_fact:
+        #ticket_id: "{{ ticket_create.json.id }}"
+        ticket_id: "{{ ticket_create.json.id | default('undefined') }}"
+
+    #- name: Debug ticket ID
+    #  debug:
+    #    msg: "Ticket ID (type: {{ ticket_id | type_debug }}): {{ ticket_id }}"
+
+    - name: Attempt disk remediation
+      when: usage_percent | int >= disk_usage_threshold | int
+      become: true
+      block:
+        - name: Cleanup /tmp
+          shell: rm -rf /tmp/*
+        - name: Trim journal logs
+          shell: journalctl --vacuum-time=2d
+        - name: Check the space again
+          command: df -h /
+          register: disk_check1
+          changed_when: false
+
+        - name: Parse usage percent as an integer
+          set_fact:
+            usage_percent1: "{{ disk_check1.stdout_lines[1].split()[4] | regex_replace('%', '') | int }}"
+
+        - name: Failling if not fixed
+          command: df -ThP /
+          failed_when: usage_percent1 | int >= disk_usage_threshold | int
+
+      rescue:
+        - set_fact:
+            remediation_failed: true
+      always:
+        - name: Save ticket ID
+          set_fact:
+            ticket_id: "{{ ticket_create.json.id }}"
+
+    - name: Escalate ticket to Linux Admin group
+      when: remediation_failed is defined and remediation_failed
+      uri:
+        url: "{{ zammad_url }}/api/v1/tickets/{{ ticket_id }}"
+        method: PUT
+        headers:
+          Authorization: "Token token={{ zammad_token }}"
+        body_format: json
+        body:
+          group_id: "{{ linux_admin_group_id }}"
+          article:
+            subject: "Escalation Notice"
+            body: "{{ lookup('template', 'escalation_note.j2') }}"
+            type: note
+
+    - name: Close ticket if remediation succeeded
+      when: ticket_id is defined and ticket_id != "undefined" and remediation_failed is not defined
+      uri:
+        url: "{{ zammad_url }}/api/v1/tickets/{{ ticket_id }}"
+        method: PUT
+        headers:
+          Authorization: "Token token={{ zammad_token }}"
+        body_format: json
+        body:
+          state: "closed"

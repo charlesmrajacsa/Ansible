@@ -1,0 +1,6 @@
+- name: Disk check and creating a ticket
+  hosts: all
+  gather_facts: false
+  roles:
+    - role: disk_usage_alert_role
+      

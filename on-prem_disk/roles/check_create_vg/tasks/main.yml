@@ -1,0 +1,110 @@
+- name: Check if VG exists
+  command: vgdisplay "{{ vg_name }}"
+  register: vg_status
+  failed_when: false
+  changed_when: false
+
+- name: List available disks (excluding system disk)
+  shell: lsblk -dn -o NAME | grep -v -E "sda"
+  register: candidate_disks
+  changed_when: false
+
+- name: Get first available unused disk
+  shell: |
+    for dev in {{ candidate_disks.stdout_lines | map('regex_replace', '^', '/dev/') | join(' ') }}; do
+      if ! pvs "$dev" &>/dev/null && ! mount | grep -q "$dev" && ! blkid "$dev"; then
+        echo $dev; break
+      fi
+    done
+  register: available_disk
+  changed_when: false
+
+- name: Fail if no available disk found
+  fail:
+    msg: "No unused disk available for VG operations."
+  when: available_disk.stdout | trim == ""
+
+- name: Create PV and VG if VG doesn't exist
+  block:
+    - name: Create PV
+      command: pvcreate "{{ available_disk.stdout }}"
+
+    - name: Create VG
+      command: vgcreate "{{ vg_name }}" "{{ available_disk.stdout }}"
+  when: vg_status.rc != 0
+
+- name: Check VG free space
+  command: vgs --units m --noheadings --nosuffix -o vg_free "{{ vg_name }}"
+  register: vg_free
+  changed_when: false
+
+- name: Set VG free space fact
+  set_fact:
+    vg_free_mb: "{{ vg_free.stdout_lines[0] | trim | float | int }}"
+
+- name: Debug current VG free space
+  debug:
+    msg: "VG {{ vg_name }} free space: {{ vg_free_mb }} MB"
+
+- debug:
+    msg: "Required size: {{ size }}"
+
+- name: Convert required_size to MB
+  set_fact:
+    required_size_mb: >-
+      {% if size is match("^[0-9.]+[Gg]$") %}
+        {{ (size | regex_replace('[Gg]', '') | float * 1024) | int }}
+      {% elif size is match("^[0-9.]+[Mm]$") %}
+        {{ (size | regex_replace('[Mm]', '') | float) | int }}
+      {% else %}
+        0
+      {% endif %}
+
+- debug:
+    msg: "VG Free: {{ vg_free_mb }} MB | Required: {{ required_size_mb }} MB"
+
+- name: Extend VG if space is insufficient
+  block:
+
+    - name: Get another unused disk
+      shell: |
+        for dev in {{ candidate_disks.stdout_lines | map('regex_replace', '^', '/dev/') | join(' ') }}; do
+          if ! pvs "$dev" &>/dev/null && ! mount | grep -q "$dev" && ! blkid "$dev" && [ "$dev" != "{{ available_disk.stdout }}" ]; then
+            echo $dev; break
+          fi
+        done
+      register: unused_disk
+      changed_when: false
+
+    - name: Fail if no additional unused disk found
+      fail:
+        msg: "No additional unused disk found to extend VG {{ vg_name }}."
+      when: unused_disk.stdout | trim == ""
+
+    - name: Create PV on new disk
+      command: pvcreate "{{ unused_disk.stdout }}"
+
+    - name: Extend VG
+      command: vgextend "{{ vg_name }}" "{{ unused_disk.stdout }}"
+
+    - name: Recheck VG free space
+      command: vgs --units m --noheadings --nosuffix -o vg_free "{{ vg_name }}"
+      register: vg_free_updated
+      changed_when: false
+
+    - name: Update vg_free_mb
+      set_fact:
+        vg_free_mb: "{{ vg_free_updated.stdout_lines[0] | trim | float }}"
+
+    - name: Fail if VG space still insufficient
+      fail:
+        msg: "VG {{ vg_name }} still has less than required space ({{ size }}) after extension."
+      when: vg_free_mb < (size | regex_replace('G', '') | float * 1024)
+
+    - name: Debug successful extension
+      debug:
+        msg: "VG {{ vg_name }} successfully extended. Current free space: {{ vg_free_mb }} MB."
+
+  when:
+    - vg_status.rc == 0
+    - vg_free_mb < required_size_mb

@@ -1,0 +1,42 @@
+- name: Create LV
+  lvol:
+    vg: "{{ vg_name }}"
+    lv: "{{ lv_name }}"
+    size: "{{ size }}"
+
+- name: Format LV as XFS
+  filesystem:
+    fstype: xfs
+    dev: "/dev/{{ vg_name }}/{{ lv_name }}"
+
+- name: Ensure mount point exists
+  file:
+    path: "{{ mount_point }}"
+    state: directory
+    mode: '0755'
+
+- name: Abort if already mounted
+  shell: mount | grep -qw "{{ mount_point }}"
+  register: mnt_check
+  changed_when: false
+  ignore_errors: true
+
+- name: Exit if mount exists
+  fail:
+    msg: "Mount point {{ mount_point }} already in use."
+  when: mnt_check.rc == 0
+
+- name: Mount the volume
+  mount:
+    path: "{{ mount_point }}"
+    src: "/dev/{{ vg_name }}/{{ lv_name }}"
+    fstype: xfs
+    state: mounted
+
+- name: Persist mount
+  mount:
+    path: "{{ mount_point }}"
+    src: "/dev/{{ vg_name }}/{{ lv_name }}"
+    fstype: xfs
+    opts: defaults
+    state: present
